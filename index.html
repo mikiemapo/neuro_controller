@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Synapse // Zero-Hardware Neuro-Controller</title>
+  
+  <!-- MediaPipe Face Mesh Dependencies via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      --bg: #07090e;
+      --card-bg: rgba(18, 22, 34, 0.75);
+      --border: rgba(0, 240, 255, 0.2);
+      --cyan: #00f0ff;
+      --purple: #8a2be2;
+      --text: #e6edf3;
+      --subtext: #8b949e;
+      --danger: #ff0055;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    header {
+      width: 100%;
+      max-width: 800px;
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand { font-size: 1.1rem; font-weight: 800; letter-spacing: 2px; color: var(--cyan); text-transform: uppercase; }
+    .badge { background: rgba(0, 240, 255, 0.1); border: 1px solid var(--cyan); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; color: var(--cyan); }
+
+    .main-container {
+      width: 100%;
+      max-width: 800px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      flex-grow: 1;
+    }
+
+    /* Game Stage */
+    .viewport {
+      position: relative;
+      width: 100%;
+      height: 380px;
+      background: radial-gradient(circle at 50% 50%, #151b2e 0%, #07090e 100%);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0, 240, 255, 0.05);
+    }
+
+    canvas#game-canvas { width: 100%; height: 100%; display: block; }
+
+    /* Telemetry Panel */
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .metric-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 14px;
+      border-radius: 8px;
+    }
+
+    .metric-label { font-size: 0.75rem; color: var(--subtext); text-transform: uppercase; letter-spacing: 1px; }
+    .metric-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; color: #fff; }
+
+    /* Control Controls */
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px;
+      background: rgba(0, 240, 255, 0.15);
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      transition: all 0.2s ease;
+    }
+
+    button:hover { background: var(--cyan); color: #000; }
+    button.secondary { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.2); color: var(--text); }
+    button.secondary:hover { background: rgba(255, 255, 255, 0.15); }
+
+    /* Hidden video element used for tracking */
+    #webcam { display: none; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">Synapse // Engine</div>
+    <div class="badge" id="engine-status">STANDBY</div>
+  </header>
+
+  <div class="main-container">
+    <div class="viewport">
+      <canvas id="game-canvas"></canvas>
+    </div>
+
+    <div class="dashboard">
+      <div class="metric-card">
+        <div class="metric-label">Neural Focus</div>
+        <div class="metric-value" id="val-focus">0%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Eye Stability</div>
+        <div class="metric-value" id="val-gaze">--</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">State</div>
+        <div class="metric-value" id="val-state" style="color: var(--cyan)">DISENGAGED</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="btn-camera">Initialize Camera Sensor</button>
+      <button class="secondary" id="btn-mock">Toggle Simulation Mode</button>
+    </div>
+  </div>
+
+  <video id="webcam" playsinline></video>
+
+  <script>
+    // State
+    let focusScore = 0.0;
+    let targetFocus = 0.0;
+    let isTracking = false;
+    let isMockMode = false;
+    let mockInterval = null;
+
+    // DOM Elements
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+    const statusBadge = document.getElementById('engine-status');
+    const valFocus = document.getElementById('val-focus');
+    const valGaze = document.getElementById('val-gaze');
+    const valState = document.getElementById('val-state');
+    const video = document.getElementById('webcam');
+    const btnCamera = document.getElementById('btn-camera');
+    const btnMock = document.getElementById('btn-mock');
+
+    // Resize Canvas
+    function resize() {
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 1. Interactive Visual Mechanics (Levitating Orb + Particles)
+    let ballY = canvas.height / 2;
+    let particles = [];
+
+    class Particle {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = (Math.random() - 0.5) * 3;
+        this.vy = (Math.random() - 0.5) * 3;
+        this.alpha = 1.0;
+        this.radius = Math.random() * 3 + 1;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.alpha -= 0.02;
+      }
+      draw() {
+        ctx.save();
+        ctx.globalAlpha = this.alpha;
+        ctx.fillStyle = '#00f0ff';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Smooth focus transitions
+      focusScore += (targetFocus - focusScore) * 0.08;
+
+      // Map focus directly to elevation (0 = bottom, 1 = top)
+      const targetY = (canvas.height - 60) - (focusScore * (canvas.height - 120));
+      ballY += (targetY - ballY) * 0.1;
+
+      const centerX = canvas.width / 2;
+
+      // Spawn energy particles if focused
+      if (focusScore > 0.3 && Math.random() < focusScore) {
+        particles.push(new Particle(centerX, ballY));
+      }
+
+      // Draw Particles
+      particles.forEach((p, idx) => {
+        p.update();
+        p.draw();
+        if (p.alpha <= 0) particles.splice(idx, 1);
+      });
+
+      // Draw Orb Glow
+      const glowRadius = 30 + (focusScore * 35);
+      const gradient = ctx.createRadialGradient(centerX, ballY, 5, centerX, ballY, glowRadius);
+      gradient.addColorStop(0, '#ffffff');
+      gradient.addColorStop(0.3, '#00f0ff');
+      gradient.addColorStop(1, 'rgba(0, 240, 255, 0)');
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(centerX, ballY, glowRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // UI Labels inside viewport
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.font = '12px monospace';
+      ctx.fillText(`FIELD POTENTIAL: ${(focusScore * 100).toFixed(0)}%`, 20, 30);
+
+      // Update Dashboard
+      valFocus.innerText = `${(focusScore * 100).toFixed(0)}%`;
+      if (focusScore > 0.6) {
+        valState.innerText = "HYPER-FOCUS";
+        valState.style.color = "#00f0ff";
+      } else if (focusScore > 0.25) {
+        valState.innerText = "ATTENTIVE";
+        valState.style.color = "#8a2be2";
+      } else {
+        valState.innerText = "DISENGAGED";
+        valState.style.color = "#8b949e";
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+
+    // 2. Computer Vision Engine (MediaPipe Face Mesh)
+    let lastNosePos = null;
+
+    function onResults(results) {
+      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+        targetFocus = 0.0;
+        valGaze.innerText = "NO FACE";
+        return;
+      }
+
+      const landmarks = results.multiFaceLandmarks[0];
+
+      // Measure Eye Aspect Ratio (EAR) - Left eye points: 159, 145
+      const eyeHeight = Math.abs(landmarks[159].y - landmarks[145].y);
+      const eyeWidth  = Math.abs(landmarks[33].x - landmarks[133].x);
+      const ear = eyeHeight / eyeWidth;
+
+      const isBlinking = ear < 0.18;
+
+      // Measure Head Stability (Landmark 4 = Nose Tip)
+      const nose = landmarks[4];
+      let movement = 0;
+      if (lastNosePos) {
+        const dx = (nose.x - lastNosePos.x) * 100;
+        const dy = (nose.y - lastNosePos.y) * 100;
+        movement = Math.sqrt(dx * dx + dy * dy);
+      }
+      lastNosePos = nose;
+
+      // Stability: low movement = steady gaze
+      const stability = Math.max(0, 1.0 - (movement * 1.5));
+      valGaze.innerText = `${(stability * 100).toFixed(0)}%`;
+
+      // Aggregate Focus: sustained stability + open eyes
+      if (isBlinking) {
+        targetFocus = Math.max(0, targetFocus - 0.15); // Drop on blink/squint
+      } else {
+        targetFocus = Math.min(1.0, (stability * 0.8) + 0.2);
+      }
+    }
+
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    faceMesh.onResults(onResults);
+
+    // 3. User Controls
+    btnCamera.addEventListener('click', async () => {
+      if (isMockMode) toggleMockMode();
+
+      try {
+        const camera = new Camera(video, {
+          onFrame: async () => { await faceMesh.send({ image: video }); },
+          width: 480,
+          height: 360
+        });
+        await camera.start();
+        isTracking = true;
+        statusBadge.innerText = "ACTIVE SENSOR";
+        statusBadge.style.color = "#00f0ff";
+        btnCamera.innerText = "Sensor Running";
+        btnCamera.disabled = true;
+      } catch (err) {
+        alert("Camera initialization failed. Enable permissions or use Simulation Mode.");
+        console.error(err);
+      }
+    });
+
+    function toggleMockMode() {
+      isMockMode = !isMockMode;
+      if (isMockMode) {
+        statusBadge.innerText = "SIMULATION";
+        statusBadge.style.color = "#ffaa00";
+        valGaze.innerText = "SYNTHETIC";
+        btnMock.innerText = "Stop Simulation";
+        let t = 0;
+        mockInterval = setInterval(() => {
+          t += 0.05;
+          targetFocus = Math.abs(Math.sin(t) * 0.8) + (Math.random() * 0.15);
+        }, 50);
+      } else {
+        clearInterval(mockInterval);
+        statusBadge.innerText = "STANDBY";
+        valGaze.innerText = "--";
+        btnMock.innerText = "Toggle Simulation Mode";
+        targetFocus = 0;
+      }
+    }
+
+    btnMock.addEventListener('click', toggleMockMode);
+  </script>
+</body>
+</html>
