@@ -3,11 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Synapse // Zero-Hardware Neuro-Controller</title>
-  
-  <!-- MediaPipe Face Mesh Dependencies via CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <title>Mind's Eye // Gaze &amp; Focus Trainer</title>
+
+  <!-- MediaPipe Tasks Vision (FaceLandmarker) via CDN. Runs fully on-device. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"
+    }
+  }
+  </script>
 
   <style>
     :root {
@@ -16,9 +21,9 @@
       --border: rgba(0, 240, 255, 0.2);
       --cyan: #00f0ff;
       --purple: #8a2be2;
+      --amber: #ffaa00;
       --text: #e6edf3;
       --subtext: #8b949e;
-      --danger: #ff0055;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
@@ -56,11 +61,10 @@
       flex-grow: 1;
     }
 
-    /* Game Stage */
     .viewport {
       position: relative;
       width: 100%;
-      height: 380px;
+      height: 400px;
       background: radial-gradient(circle at 50% 50%, #151b2e 0%, #07090e 100%);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -68,12 +72,11 @@
       box-shadow: 0 8px 32px rgba(0, 240, 255, 0.05);
     }
 
-    canvas#game-canvas { width: 100%; height: 100%; display: block; }
+    canvas#stage { width: 100%; height: 100%; display: block; }
 
-    /* Telemetry Panel */
     .dashboard {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 12px;
     }
 
@@ -85,18 +88,14 @@
       border-radius: 8px;
     }
 
-    .metric-label { font-size: 0.75rem; color: var(--subtext); text-transform: uppercase; letter-spacing: 1px; }
+    .metric-label { font-size: 0.72rem; color: var(--subtext); text-transform: uppercase; letter-spacing: 1px; }
     .metric-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; color: #fff; }
+    .metric-sub { font-size: 0.72rem; color: var(--subtext); margin-top: 2px; }
 
-    /* Control Controls */
-    .controls {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
 
     button {
-      flex: 1;
+      flex: 1 1 140px;
       padding: 12px;
       background: rgba(0, 240, 255, 0.15);
       border: 1px solid var(--cyan);
@@ -107,71 +106,151 @@
       letter-spacing: 1px;
       text-transform: uppercase;
       transition: all 0.2s ease;
+      font-size: 0.8rem;
     }
 
-    button:hover { background: var(--cyan); color: #000; }
+    button:hover:not(:disabled) { background: var(--cyan); color: #000; }
+    button:disabled { opacity: 0.35; cursor: default; }
     button.secondary { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.2); color: var(--text); }
-    button.secondary:hover { background: rgba(255, 255, 255, 0.15); }
+    button.secondary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.15); }
+    button.active { background: var(--cyan); color: #000; }
 
-    /* Hidden video element used for tracking */
+    .session-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .session-row .metric-card { flex: 1 1 150px; }
+
+    .privacy {
+      font-size: 0.72rem;
+      color: var(--subtext);
+      text-align: center;
+      padding: 8px 16px 20px;
+      max-width: 800px;
+      line-height: 1.5;
+    }
+
     #webcam { display: none; }
   </style>
 </head>
 <body>
 
   <header>
-    <div class="brand">Synapse // Engine</div>
+    <div class="brand">Mind's Eye</div>
     <div class="badge" id="engine-status">STANDBY</div>
   </header>
 
   <div class="main-container">
     <div class="viewport">
-      <canvas id="game-canvas"></canvas>
+      <canvas id="stage"></canvas>
     </div>
 
     <div class="dashboard">
       <div class="metric-card">
-        <div class="metric-label">Neural Focus</div>
-        <div class="metric-value" id="val-focus">0%</div>
+        <div class="metric-label">Gaze Point</div>
+        <div class="metric-value" id="val-gaze">--</div>
+        <div class="metric-sub" id="sub-gaze">not calibrated</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Eye Stability</div>
-        <div class="metric-value" id="val-gaze">--</div>
+        <div class="metric-label">Stillness</div>
+        <div class="metric-value" id="val-still">0%</div>
+        <div class="metric-sub">gaze + head steadiness</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Blinks / min</div>
+        <div class="metric-value" id="val-blink">0</div>
+        <div class="metric-sub" id="sub-blink">blink = click</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">State</div>
-        <div class="metric-value" id="val-state" style="color: var(--cyan)">DISENGAGED</div>
+        <div class="metric-value" id="val-state" style="color: var(--subtext)">IDLE</div>
+        <div class="metric-sub" id="sub-state">start the camera</div>
       </div>
     </div>
 
     <div class="controls">
-      <button id="btn-camera">Initialize Camera Sensor</button>
-      <button class="secondary" id="btn-mock">Toggle Simulation Mode</button>
+      <button id="btn-camera">Start Camera</button>
+      <button id="btn-calibrate" class="secondary" disabled>Calibrate Gaze</button>
+      <button id="btn-mode" class="secondary" disabled>Meditation Mode</button>
+      <button id="btn-mock" class="secondary">Simulation</button>
+    </div>
+
+    <div class="session-row" id="meditate-panel" style="display:none">
+      <div class="metric-card">
+        <div class="metric-label">Session</div>
+        <div class="metric-value" id="val-timer">5:00</div>
+        <div class="metric-sub">tap a length, then begin</div>
+      </div>
+      <div class="controls" style="flex:2">
+        <button class="secondary len-btn active" data-min="5">5 min</button>
+        <button class="secondary len-btn" data-min="3">3 min</button>
+        <button class="secondary len-btn" data-min="10">10 min</button>
+        <button id="btn-session">Begin</button>
+      </div>
     </div>
   </div>
 
-  <video id="webcam" playsinline></video>
+  <div class="privacy">
+    All camera processing happens on this device. No video or face data leaves this page.<br>
+    Mind's Eye is a focus-training toy, not a medical device. "Stillness" is a simple steadiness
+    heuristic for interaction — it does not measure attention, cognition, or health.
+  </div>
 
-  <script>
-    // State
-    let focusScore = 0.0;
-    let targetFocus = 0.0;
-    let isTracking = false;
-    let isMockMode = false;
-    let mockInterval = null;
+  <video id="webcam" playsinline muted></video>
 
-    // DOM Elements
-    const canvas = document.getElementById('game-canvas');
-    const ctx = canvas.getContext('2d');
-    const statusBadge = document.getElementById('engine-status');
-    const valFocus = document.getElementById('val-focus');
-    const valGaze = document.getElementById('val-gaze');
-    const valState = document.getElementById('val-state');
-    const video = document.getElementById('webcam');
-    const btnCamera = document.getElementById('btn-camera');
-    const btnMock = document.getElementById('btn-mock');
+  <script type="module">
+    import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
-    // Resize Canvas
+    // ---------------------------------------------------------------- state
+    const S = {
+      tracking: false,
+      mock: false,
+      mockT: 0,
+      facePresent: false,
+      // raw gaze (iris offset, roughly -0.5..0.5) and smoothed
+      rawGx: 0, rawGy: 0,
+      smGx: 0, smGy: 0,
+      // calibrated screen position 0..1
+      scrX: 0.5, scrY: 0.5, lastScrX: 0.5, lastScrY: 0.5,
+      calib: null,            // { xMin, xMax, yMin, yMax } in raw units
+      calibStep: -1,          // -1 idle, 0..3 corners
+      calibSamples: [],
+      calibCornerT: 0,
+      ear: 0.3,
+      blinking: false,
+      lastBlinkEnd: 0,
+      blinkTimes: [],
+      stillness: 0,
+      lastNose: null,
+      mode: 'gaze',           // 'gaze' | 'meditate'
+      ripples: [],
+      clicks: 0,
+      session: null,          // { endsAt, lenMin, stillSum, stillN }
+      sessionLenMin: 5,
+      breathT: 0,
+    };
+
+    // Landmark indices (MediaPipe 478-point topology)
+    const L = {
+      eyeL: { c1: 33, c2: 133, t1: 159, b1: 145, t2: 158, b2: 153, iris: 468 },
+      eyeR: { c1: 362, c2: 263, t1: 386, b1: 374, t2: 385, b2: 380, iris: 473 },
+      nose: 4,
+    };
+
+    const CALIB_CORNERS = [
+      { x: 0.10, y: 0.14 }, { x: 0.90, y: 0.14 },
+      { x: 0.90, y: 0.86 }, { x: 0.10, y: 0.86 },
+    ];
+    const CALIB_HOLD_MS = 1400;
+
+    // ---------------------------------------------------------------- dom
+    const $ = (id) => document.getElementById(id);
+    const canvas = $('stage'), ctx = canvas.getContext('2d');
+    const video = $('webcam');
+    const statusBadge = $('engine-status');
+    const valGaze = $('val-gaze'), subGaze = $('sub-gaze');
+    const valStill = $('val-still');
+    const valBlink = $('val-blink');
+    const valState = $('val-state'), subState = $('sub-state');
+    const valTimer = $('val-timer');
+
     function resize() {
       canvas.width = canvas.parentElement.clientWidth;
       canvas.height = canvas.parentElement.clientHeight;
@@ -179,190 +258,470 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // 1. Interactive Visual Mechanics (Levitating Orb + Particles)
-    let ballY = canvas.height / 2;
-    let particles = [];
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const dist2 = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+    const lerp = (a, b, t) => a + (b - a) * t;
 
-    class Particle {
-      constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.vx = (Math.random() - 0.5) * 3;
-        this.vy = (Math.random() - 0.5) * 3;
-        this.alpha = 1.0;
-        this.radius = Math.random() * 3 + 1;
-      }
-      update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.alpha -= 0.02;
-      }
-      draw() {
-        ctx.save();
-        ctx.globalAlpha = this.alpha;
-        ctx.fillStyle = '#00f0ff';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
+    function setStatus(text, color) {
+      statusBadge.innerText = text;
+      statusBadge.style.color = color || '';
+      statusBadge.style.borderColor = color || '';
     }
 
-    function render() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // ---------------------------------------------------------------- vision
+    let faceLandmarker = null;
+    let visionReady = false;
 
-      // Smooth focus transitions
-      focusScore += (targetFocus - focusScore) * 0.08;
-
-      // Map focus directly to elevation (0 = bottom, 1 = top)
-      const targetY = (canvas.height - 60) - (focusScore * (canvas.height - 120));
-      ballY += (targetY - ballY) * 0.1;
-
-      const centerX = canvas.width / 2;
-
-      // Spawn energy particles if focused
-      if (focusScore > 0.3 && Math.random() < focusScore) {
-        particles.push(new Particle(centerX, ballY));
-      }
-
-      // Draw Particles
-      particles.forEach((p, idx) => {
-        p.update();
-        p.draw();
-        if (p.alpha <= 0) particles.splice(idx, 1);
+    async function initVision() {
+      if (visionReady) return;
+      setStatus('LOADING MODEL', 'var(--amber)');
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
       });
+      visionReady = true;
+    }
 
-      // Draw Orb Glow
-      const glowRadius = 30 + (focusScore * 35);
-      const gradient = ctx.createRadialGradient(centerX, ballY, 5, centerX, ballY, glowRadius);
-      gradient.addColorStop(0, '#ffffff');
-      gradient.addColorStop(0.3, '#00f0ff');
-      gradient.addColorStop(1, 'rgba(0, 240, 255, 0)');
+    function eyeAspect(lm, e) {
+      const v1 = dist2(lm[e.t1].x, lm[e.t1].y, lm[e.b1].x, lm[e.b1].y);
+      const v2 = dist2(lm[e.t2].x, lm[e.t2].y, lm[e.b2].x, lm[e.b2].y);
+      const h = dist2(lm[e.c1].x, lm[e.c1].y, lm[e.c2].x, lm[e.c2].y);
+      return (v1 + v2) / (2 * (h || 1e-6));
+    }
 
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(centerX, ballY, glowRadius, 0, Math.PI * 2);
-      ctx.fill();
+    // Iris center offset relative to eye box, roughly -0.5..0.5.
+    // x is negated: raw camera x grows to the image-right, which is the
+    // user's left, so flip it to match screen coordinates.
+    function gazeRaw(lm, e) {
+      const iris = lm[e.iris];
+      const cx = (lm[e.c1].x + lm[e.c2].x) / 2;
+      const cy = (lm[e.t1].y + lm[e.b1].y) / 2;
+      const w = Math.abs(lm[e.c1].x - lm[e.c2].x) || 1e-6;
+      const h = Math.abs(lm[e.t1].y - lm[e.b1].y) || 1e-6;
+      return { x: -((iris.x - cx) / w), y: (iris.y - cy) / h };
+    }
 
-      // UI Labels inside viewport
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.font = '12px monospace';
-      ctx.fillText(`FIELD POTENTIAL: ${(focusScore * 100).toFixed(0)}%`, 20, 30);
+    function processLandmarks(lm) {
+      S.facePresent = true;
 
-      // Update Dashboard
-      valFocus.innerText = `${(focusScore * 100).toFixed(0)}%`;
-      if (focusScore > 0.6) {
-        valState.innerText = "HYPER-FOCUS";
-        valState.style.color = "#00f0ff";
-      } else if (focusScore > 0.25) {
-        valState.innerText = "ATTENTIVE";
-        valState.style.color = "#8a2be2";
-      } else {
-        valState.innerText = "DISENGAGED";
-        valState.style.color = "#8b949e";
+      // --- blink (EAR with hysteresis) ---
+      const ear = (eyeAspect(lm, L.eyeL) + eyeAspect(lm, L.eyeR)) / 2;
+      S.ear = lerp(S.ear, ear, 0.5);
+      if (!S.blinking && S.ear < 0.19) {
+        S.blinking = true;
+      } else if (S.blinking && S.ear > 0.23) {
+        S.blinking = false;
+        onBlinkEnd();
       }
 
-      requestAnimationFrame(render);
+      // --- gaze ---
+      const gl = gazeRaw(lm, L.eyeL);
+      const gr = gazeRaw(lm, L.eyeR);
+      S.rawGx = (gl.x + gr.x) / 2;
+      S.rawGy = (gl.y + gr.y) / 2;
+      S.smGx = lerp(S.smGx, S.rawGx, 0.35);
+      S.smGy = lerp(S.smGy, S.rawGy, 0.35);
+
+      // calibration sampling
+      if (S.calibStep >= 0) {
+        S.calibSamples.push({ x: S.smGx, y: S.smGy });
+      }
+
+      // --- screen mapping ---
+      if (S.calib) {
+        const c = S.calib;
+        S.scrX = clamp((S.smGx - c.xMin) / ((c.xMax - c.xMin) || 1e-6), 0, 1);
+        S.scrY = clamp((S.smGy - c.yMin) / ((c.yMax - c.yMin) || 1e-6), 0, 1);
+      } else {
+        // uncalibrated fallback: rough scale around center
+        S.scrX = clamp(0.5 + S.smGx * 1.6, 0, 1);
+        S.scrY = clamp(0.5 + S.smGy * 2.2, 0, 1);
+      }
+
+      // --- stillness: gaze velocity + head velocity + eyes open ---
+      const gazeVel = dist2(S.scrX, S.scrY, S.lastScrX, S.lastScrY);
+      S.lastScrX = S.scrX; S.lastScrY = S.scrY;
+      const nose = lm[L.nose];
+      let headVel = 0;
+      if (S.lastNose) {
+        headVel = dist2(nose.x, nose.y, S.lastNose.x, S.lastNose.y) * 100;
+      }
+      S.lastNose = { x: nose.x, y: nose.y };
+
+      const gazeStill = clamp(1 - gazeVel * 30, 0, 1);
+      const headStill = clamp(1 - headVel * 1.1, 0, 1);
+      const eyesOpen = S.ear > 0.22 ? 1 : 0.25;
+      const target = 0.45 * gazeStill + 0.35 * headStill + 0.20 * eyesOpen;
+      S.stillness = lerp(S.stillness, target, 0.06);
     }
-    render();
 
-    // 2. Computer Vision Engine (MediaPipe Face Mesh)
-    let lastNosePos = null;
+    function onBlinkEnd() {
+      const now = performance.now();
+      if (now - S.lastBlinkEnd < 250) return; // debounce flutter
+      S.lastBlinkEnd = now;
+      S.blinkTimes.push(now);
+      // blink = click at the gaze point (gaze mode only, needs calibration)
+      if (S.mode === 'gaze' && S.facePresent && S.calib && !S.mock) {
+        S.clicks++;
+        S.ripples.push({ x: S.scrX, y: S.scrY, r: 8, alpha: 1 });
+      } else if (S.mode === 'gaze' && S.mock) {
+        S.clicks++;
+        S.ripples.push({ x: S.scrX, y: S.scrY, r: 8, alpha: 1 });
+      }
+    }
 
-    function onResults(results) {
-      if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-        targetFocus = 0.0;
-        valGaze.innerText = "NO FACE";
+    function pruneBlinkTimes(now) {
+      S.blinkTimes = S.blinkTimes.filter((t) => now - t < 60000);
+    }
+
+    // --- per-frame pump ---
+    let lastVideoTime = -1;
+    async function pump() {
+      if (S.tracking && visionReady && !S.mock) {
+        const now = performance.now();
+        if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
+          lastVideoTime = video.currentTime;
+          const res = faceLandmarker.detectForVideo(video, now);
+          if (res.faceLandmarks && res.faceLandmarks.length > 0) {
+            processLandmarks(res.faceLandmarks[0]);
+          } else {
+            S.facePresent = false;
+            S.stillness = lerp(S.stillness, 0, 0.05);
+          }
+        }
+      }
+      if (S.mock) mockPump();
+      updateCalibrationClock();
+      requestAnimationFrame(pump);
+    }
+
+    // --- simulation mode: synthetic gaze/blink/stillness for testing ---
+    function mockPump() {
+      S.mockT += 0.03;
+      const t = S.mockT;
+      S.facePresent = true;
+      S.smGx = Math.sin(t * 0.7) * 0.25;
+      S.smGy = Math.cos(t * 0.5) * 0.18;
+      if (S.calib) {
+        const c = S.calib;
+        S.scrX = clamp((S.smGx - c.xMin) / ((c.xMax - c.xMin) || 1e-6), 0, 1);
+        S.scrY = clamp((S.smGy - c.yMin) / ((c.yMax - c.yMin) || 1e-6), 0, 1);
+      } else {
+        S.scrX = clamp(0.5 + S.smGx * 1.6, 0, 1);
+        S.scrY = clamp(0.5 + S.smGy * 2.2, 0, 1);
+      }
+      // synthetic blink every ~4s
+      if (Math.sin(t * 1.57) > 0.995 && !S.blinking) {
+        S.blinking = true;
+        setTimeout(() => { S.blinking = false; onBlinkEnd(); }, 140);
+      }
+      S.ear = S.blinking ? 0.1 : 0.3;
+      if (S.calibStep >= 0) S.calibSamples.push({ x: S.smGx, y: S.smGy });
+      const target = 0.55 + 0.35 * Math.sin(t * 0.4);
+      S.stillness = lerp(S.stillness, clamp(target, 0, 1), 0.05);
+      S.lastScrX = S.scrX; S.lastScrY = S.scrY;
+    }
+
+    // --- calibration: 4 corners, ~1.4s fixation each ---
+    function startCalibration() {
+      if (!S.tracking && !S.mock) return;
+      S.calibStep = 0;
+      S.calibSamples = [];
+      S.calibCornerT = performance.now();
+      setStatus('CALIBRATING 1/4', 'var(--amber)');
+      subState.innerText = 'look at each dot, hold still';
+    }
+
+    function updateCalibrationClock() {
+      if (S.calibStep < 0) return;
+      const now = performance.now();
+      if (now - S.calibCornerT >= CALIB_HOLD_MS) {
+        // average samples for this corner
+        const n = S.calibSamples.length || 1;
+        const avg = S.calibSamples.reduce(
+          (a, s) => ({ x: a.x + s.x / n, y: a.y + s.y / n }), { x: 0, y: 0 });
+        S['calibCorner' + S.calibStep] = avg;
+        S.calibSamples = [];
+        S.calibStep++;
+        S.calibCornerT = now;
+        if (S.calibStep > 3) {
+          const TL = S.calibCorner0, TR = S.calibCorner1,
+                BR = S.calibCorner2, BL = S.calibCorner3;
+          S.calib = {
+            xMin: Math.min(TL.x, BL.x), xMax: Math.max(TR.x, BR.x),
+            yMin: Math.min(TL.y, TR.y), yMax: Math.max(BL.y, BR.y),
+          };
+          // sanity: need real spread or the mapping is garbage
+          if ((S.calib.xMax - S.calib.xMin) < 0.03 || (S.calib.yMax - S.calib.yMin) < 0.03) {
+            S.calib = null;
+            subGaze.innerText = 'calibration failed — try again';
+          } else {
+            subGaze.innerText = 'calibrated ✓';
+          }
+          S.calibStep = -1;
+          setStatus(S.mock ? 'SIMULATION' : 'TRACKING', S.mock ? 'var(--amber)' : 'var(--cyan)');
+          subState.innerText = S.mode === 'gaze' ? 'look around — blink to click' : 'breathe with the ring';
+        } else {
+          setStatus(`CALIBRATING ${S.calibStep + 1}/4`, 'var(--amber)');
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------- render
+    function drawGazeMode() {
+      const w = canvas.width, h = canvas.height;
+      const px = S.scrX * w, py = S.scrY * h;
+
+      // calibration dots
+      if (S.calibStep >= 0) {
+        const c = CALIB_CORNERS[S.calibStep];
+        const cx = c.x * w, cy = c.y * h;
+        const pulse = 14 + 6 * Math.sin(performance.now() / 200);
+        ctx.strokeStyle = '#ffaa00';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(cx, cy, pulse, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.font = '13px monospace';
+        ctx.fillText(`Look at the dot — ${S.calibStep + 1}/4`, 20, 30);
         return;
       }
 
-      const landmarks = results.multiFaceLandmarks[0];
+      // gaze cursor
+      const active = S.facePresent && (S.tracking || S.mock);
+      ctx.strokeStyle = active ? '#00f0ff' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 16, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fillStyle = ctx.strokeStyle; ctx.fill();
+      // crosshair ticks
+      ctx.beginPath();
+      [[-24, 0], [24, 0], [0, -24], [0, 24]].forEach(([dx, dy]) => {
+        ctx.moveTo(px + dx * 0.6, py + dy * 0.6);
+        ctx.lineTo(px + dx, py + dy);
+      });
+      ctx.stroke();
 
-      // Measure Eye Aspect Ratio (EAR) - Left eye points: 159, 145
-      const eyeHeight = Math.abs(landmarks[159].y - landmarks[145].y);
-      const eyeWidth  = Math.abs(landmarks[33].x - landmarks[133].x);
-      const ear = eyeHeight / eyeWidth;
+      // click ripples
+      S.ripples.forEach((r) => {
+        ctx.strokeStyle = `rgba(0,240,255,${r.alpha})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(r.x * w, r.y * h, r.r, 0, Math.PI * 2); ctx.stroke();
+        r.r += 2.5; r.alpha -= 0.04;
+      });
+      S.ripples = S.ripples.filter((r) => r.alpha > 0);
 
-      const isBlinking = ear < 0.18;
-
-      // Measure Head Stability (Landmark 4 = Nose Tip)
-      const nose = landmarks[4];
-      let movement = 0;
-      if (lastNosePos) {
-        const dx = (nose.x - lastNosePos.x) * 100;
-        const dy = (nose.y - lastNosePos.y) * 100;
-        movement = Math.sqrt(dx * dx + dy * dy);
-      }
-      lastNosePos = nose;
-
-      // Stability: low movement = steady gaze
-      const stability = Math.max(0, 1.0 - (movement * 1.5));
-      valGaze.innerText = `${(stability * 100).toFixed(0)}%`;
-
-      // Aggregate Focus: sustained stability + open eyes
-      if (isBlinking) {
-        targetFocus = Math.max(0, targetFocus - 0.15); // Drop on blink/squint
-      } else {
-        targetFocus = Math.min(1.0, (stability * 0.8) + 0.2);
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.font = '12px monospace';
+      ctx.fillText(`BLINK-CLICKS: ${S.clicks}`, 20, 30);
+      if (!S.calib) {
+        ctx.fillStyle = 'rgba(255,170,0,0.8)';
+        ctx.fillText('Uncalibrated — gaze is approximate. Hit CALIBRATE GAZE.', 20, h - 16);
       }
     }
 
-    const faceMesh = new FaceMesh({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-    });
+    function drawMeditateMode(now) {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2, cy = h / 2;
 
-    faceMesh.setOptions({
-      maxNumFaces: 1,
-      refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-    faceMesh.onResults(onResults);
+      // breath pacer: 4s in, 4s out
+      const phase = (now % 8000) / 8000; // 0..1
+      const inhale = phase < 0.5;
+      const t = inhale ? phase * 2 : (1 - phase) * 2; // 0..1..0
+      const breathR = 40 + t * 55;
 
-    // 3. User Controls
-    btnCamera.addEventListener('click', async () => {
-      if (isMockMode) toggleMockMode();
+      ctx.strokeStyle = 'rgba(138,43,226,0.8)';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(cx, cy, breathR, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      ctx.font = '15px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(inhale ? 'breathe in' : 'breathe out', cx, cy - breathR - 14);
+      ctx.textAlign = 'left';
 
+      // orb levitates with stillness
+      const orbY = (h - 50) - (S.stillness * (h - 140));
+      const glow = 26 + S.stillness * 40;
+      const grad = ctx.createRadialGradient(cx, orbY, 4, cx, orbY, glow);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.3, '#8a2be2');
+      grad.addColorStop(1, 'rgba(138,43,226,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(cx, orbY, glow, 0, Math.PI * 2); ctx.fill();
+
+      // session timer
+      if (S.session) {
+        const remain = Math.max(0, S.session.endsAt - now);
+        const mm = Math.floor(remain / 60000), ss = Math.floor((remain % 60000) / 1000);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.font = '22px monospace';
+        ctx.fillText(`${mm}:${String(ss).padStart(2, '0')}`, 20, 34);
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.font = '12px monospace';
+        ctx.fillText('Pick a length below and press BEGIN', 20, 30);
+      }
+    }
+
+    function render(now) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (S.mode === 'gaze') drawGazeMode();
+      else drawMeditateMode(now || performance.now());
+      updateDashboard(now || performance.now());
+      // session end check
+      if (S.session && (now || performance.now()) >= S.session.endsAt) endSession();
+      requestAnimationFrame(render);
+    }
+
+    function updateDashboard(now) {
+      pruneBlinkTimes(now);
+      // gaze readout
+      if (S.facePresent && (S.tracking || S.mock)) {
+        const dirs = [];
+        if (S.scrX < 0.35) dirs.push('←');
+        else if (S.scrX > 0.65) dirs.push('→');
+        if (S.scrY < 0.35) dirs.push('↑');
+        else if (S.scrY > 0.65) dirs.push('↓');
+        valGaze.innerText = dirs.join(' ') || '●';
+        valGaze.style.color = '#fff';
+      } else {
+        valGaze.innerText = '--';
+      }
+      valStill.innerText = `${Math.round(S.stillness * 100)}%`;
+      valBlink.innerText = String(S.blinkTimes.length);
+      // session accumulation
+      if (S.session) {
+        S.session.stillSum += S.stillness;
+        S.session.stillN++;
+        const remain = Math.max(0, S.session.endsAt - now);
+        valTimer.innerText = `${Math.floor(remain / 60000)}:${String(Math.floor((remain % 60000) / 1000)).padStart(2, '0')}`;
+      }
+      // state
+      let state, color, sub;
+      if (S.calibStep >= 0) { state = 'CALIBRATING'; color = 'var(--amber)'; sub = 'hold your gaze on each dot'; }
+      else if (!S.facePresent) { state = 'NO FACE'; color = 'var(--subtext)'; sub = 'face the camera'; }
+      else if (S.stillness > 0.65) { state = 'SETTLED'; color = 'var(--cyan)'; sub = S.mode === 'gaze' ? 'steady gaze' : 'deep stillness'; }
+      else if (S.stillness > 0.35) { state = 'STEADY'; color = 'var(--purple)'; sub = 'looking good'; }
+      else { state = 'DRIFTING'; color = 'var(--subtext)'; sub = 'settle your gaze'; }
+      valState.innerText = state;
+      valState.style.color = color;
+      subState.innerText = sub;
+    }
+
+    // ---------------------------------------------------------------- session
+    function beginSession() {
+      if (!S.tracking && !S.mock) return;
+      S.session = {
+        endsAt: performance.now() + S.sessionLenMin * 60000,
+        stillSum: 0, stillN: 0,
+        blinksAtStart: S.blinkTimes.length,
+      };
+      $('btn-session').innerText = 'End';
+      setStatus('SESSION', 'var(--purple)');
+    }
+
+    function endSession() {
+      const s = S.session;
+      S.session = null;
+      $('btn-session').innerText = 'Begin';
+      const avg = s.stillN ? Math.round((s.stillSum / s.stillN) * 100) : 0;
+      const blinks = S.blinkTimes.length - s.blinksAtStart;
+      valTimer.innerText = 'done ✓';
+      subState.innerText = `session: ${avg}% stillness, ${blinks} blinks`;
+      setStatus(S.mock ? 'SIMULATION' : 'TRACKING', S.mock ? 'var(--amber)' : 'var(--cyan)');
+    }
+
+    // ---------------------------------------------------------------- wiring
+    $('btn-camera').addEventListener('click', async () => {
+      if (S.mock) toggleMock();
       try {
-        const camera = new Camera(video, {
-          onFrame: async () => { await faceMesh.send({ image: video }); },
-          width: 480,
-          height: 360
+        await initVision();
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: 'user' },
+          audio: false,
         });
-        await camera.start();
-        isTracking = true;
-        statusBadge.innerText = "ACTIVE SENSOR";
-        statusBadge.style.color = "#00f0ff";
-        btnCamera.innerText = "Sensor Running";
-        btnCamera.disabled = true;
+        video.srcObject = stream;
+        await video.play();
+        S.tracking = true;
+        setStatus('TRACKING', 'var(--cyan)');
+        $('btn-camera').innerText = 'Camera On';
+        $('btn-camera').disabled = true;
+        $('btn-calibrate').disabled = false;
+        $('btn-mode').disabled = false;
+        subState.innerText = 'look around — blink to click';
+        requestAnimationFrame(pump);
       } catch (err) {
-        alert("Camera initialization failed. Enable permissions or use Simulation Mode.");
+        alert('Camera failed. Check permissions, use HTTPS, or try Simulation.');
         console.error(err);
+        setStatus('STANDBY', '');
       }
     });
 
-    function toggleMockMode() {
-      isMockMode = !isMockMode;
-      if (isMockMode) {
-        statusBadge.innerText = "SIMULATION";
-        statusBadge.style.color = "#ffaa00";
-        valGaze.innerText = "SYNTHETIC";
-        btnMock.innerText = "Stop Simulation";
-        let t = 0;
-        mockInterval = setInterval(() => {
-          t += 0.05;
-          targetFocus = Math.abs(Math.sin(t) * 0.8) + (Math.random() * 0.15);
-        }, 50);
+    $('btn-calibrate').addEventListener('click', startCalibration);
+
+    $('btn-mode').addEventListener('click', () => {
+      if (S.mode === 'gaze') {
+        S.mode = 'meditate';
+        $('btn-mode').innerText = 'Gaze Mode';
+        $('btn-mode').classList.add('active');
+        $('meditate-panel').style.display = 'flex';
+        subState.innerText = 'breathe with the ring';
       } else {
-        clearInterval(mockInterval);
-        statusBadge.innerText = "STANDBY";
-        valGaze.innerText = "--";
-        btnMock.innerText = "Toggle Simulation Mode";
-        targetFocus = 0;
+        S.mode = 'gaze';
+        $('btn-mode').innerText = 'Meditation Mode';
+        $('btn-mode').classList.remove('active');
+        $('meditate-panel').style.display = 'none';
+        if (S.session) endSession();
+        subState.innerText = 'look around — blink to click';
+      }
+    });
+
+    document.querySelectorAll('.len-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('.len-btn').forEach((x) => x.classList.remove('active'));
+        b.classList.add('active');
+        S.sessionLenMin = parseInt(b.dataset.min, 10);
+        if (!S.session) valTimer.innerText = `${S.sessionLenMin}:00`;
+      });
+    });
+
+    $('btn-session').addEventListener('click', () => {
+      if (S.session) endSession();
+      else beginSession();
+    });
+
+    function toggleMock() {
+      S.mock = !S.mock;
+      if (S.mock) {
+        S.tracking = false;
+        try { video.srcObject?.getTracks().forEach((t) => t.stop()); } catch (e) {}
+        setStatus('SIMULATION', 'var(--amber)');
+        $('btn-mock').innerText = 'Stop Sim';
+        $('btn-mock').classList.add('active');
+        $('btn-calibrate').disabled = false;
+        $('btn-mode').disabled = false;
+        requestAnimationFrame(pump);
+      } else {
+        setStatus('STANDBY', '');
+        $('btn-mock').innerText = 'Simulation';
+        $('btn-mock').classList.remove('active');
+        $('btn-camera').disabled = false;
+        $('btn-camera').innerText = 'Start Camera';
+        S.facePresent = false;
+        S.stillness = 0;
       }
     }
+    $('btn-mock').addEventListener('click', toggleMock);
 
-    btnMock.addEventListener('click', toggleMockMode);
+    // boot
+    requestAnimationFrame(render);
   </script>
 </body>
 </html>

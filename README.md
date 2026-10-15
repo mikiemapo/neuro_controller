@@ -1,37 +1,60 @@
-# neuro_controller
-# Synapse // Zero-Hardware Neuro-Controller 🧠✨
+# Mind's Eye // Gaze & Focus Trainer
 
-Synapse is an open-source, zero-hardware biofeedback engine that converts standard device camera streams into real-time focus & telekinesis mechanics.
+An open-source, zero-hardware gaze & focus trainer that turns an ordinary device
+camera into real-time gaze input and guided stillness sessions. No EEG headband,
+no health-data permissions, no App Store health review — just computer vision,
+running entirely on-device in the browser.
 
-It eliminates the need for expensive EEG hardware ($300–$1,000) by utilizing on-device computer vision to infer cognitive load, blink dynamics, and micro-fixation.
+This is a pivot from the original "meditation-hardware-as-gamepad" concept:
+instead of reading brain data (which mobile app stores gatekeep hard), it reads
+*where you look* and *how steady you hold it* — and that turns out to be the
+better game controller anyway.
 
-![Synapse Demo](https://img.shields.io/badge/Status-Public%20Beta-00f0ff)
-![License](https://img.shields.io/badge/License-MIT-purple)
+## What it does
 
----
+- **Gaze cursor** — iris tracking estimates where you're looking on screen.
+  Calibrate once (4 corner dots, ~6 seconds) and the cursor follows your eyes.
+- **Blink = click** — a detected blink fires a click at your gaze point.
+  Hands-free input with zero health data involved.
+- **Meditation mode** — breath pacer ring, stillness-driven levitating orb,
+  and timed sessions (3 / 5 / 10 min) with an end-of-session summary.
+- **Simulation mode** — synthetic gaze/blink feed for testing without a camera.
+- **On-device only** — MediaPipe Tasks Vision (FaceLandmarker) runs locally;
+  no video or face data ever leaves the page.
 
-## ⚡ Features
+## Metrics (honest labels)
 
-* **Zero Hardware Barrier:** Runs entirely on phone or desktop browsers via the selfie camera.
-* **On-Device Vision Engine:** Built with Google MediaPipe Face Mesh (runs locally, no facial data is sent to any server).
-* **Physiological Metrics:**
-  * **Eye Aspect Ratio (EAR):** Detects involuntary blink shifts and fatigue.
-  * **Head Stability Index:** Quantifies unbroken focus and gaze stability.
-  * **Synthetic Focus Engine:** Built-in simulation toggle for development and testing without a camera.
-* **App Store & Mobile Ready:** Zero build dependencies. Can be wrapped into iOS/Android apps via Capacitor or deployed straight to GitHub Pages.
+- **Gaze point** — estimated from iris-center offset vs. eye corners, averaged
+  across both eyes, smoothed, mapped through your calibration.
+- **Stillness** — a simple heuristic: low gaze velocity + low head movement +
+  eyes open. It measures *steadiness for interaction*, not attention or cognition.
+- **Blinks/min** — rolling 60-second count from eye-aspect-ratio detection.
 
----
+Mind's Eye is a focus-training toy, **not a medical device**. Nothing here
+measures attention, cognitive load, or health.
 
-## 🚀 Instant Deployment (GitHub Pages)
+## Run it (GitHub Pages, ~60 seconds)
 
-You can run this app live in under 60 seconds:
+1. Push this repository to your GitHub account.
+2. **Settings → Pages** → Deploy from a branch → `main`, folder `/ (root)`.
+3. Open the URL on your phone or desktop (HTTPS is required for camera access).
 
-1. Fork or push this repository to your GitHub account.
-2. Go to **Settings > Pages**.
-3. Under **Build and deployment > Source**, select **Deploy from a branch**.
-4. Set the branch to `main` and folder to `/ (root)`. Click **Save**.
-5. Open the resulting URL on your smartphone or desktop browser.
+Or open `index.html` from any static host. Camera needs HTTPS or localhost.
 
----
+## How gaze estimation works
 
-## 🕹️ How It Works
+MediaPipe's FaceLandmarker returns 478 facial landmarks including iris centers
+(468 left, 473 right). For each eye, the iris center's offset from the eye-box
+center — normalized by eye width/height — gives a raw gaze vector. Left and
+right eyes are averaged, smoothed with an exponential moving average, then
+mapped to screen coordinates through a 4-point calibration (raw extremes at
+the screen corners → linear map, clamped 0–1).
+
+Blink detection uses the classic eye-aspect-ratio (EAR) with hysteresis
+(close below 0.19, reopen above 0.23) to avoid flutter.
+
+## Stack
+
+- Single `index.html`, no build step, no dependencies to install.
+- `@mediapipe/tasks-vision` (FaceLandmarker) via CDN, GPU delegate.
+- MIT licensed.
